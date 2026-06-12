@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { updateUser } from "@netlify/identity";
+import { recoverPassword, updateUser } from "@netlify/identity";
 import { useIdentity } from "../lib/identity-context.js";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, KeyRound } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 
@@ -11,13 +11,20 @@ export const Route = createFileRoute("/reset-password")({
 
 function ResetPasswordPage() {
   const { user, ready } = useIdentity();
+  const [token, setToken] = useState<string | null>(null);
+  const [tokenChecked, setTokenChecked] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  if (!ready) {
+  useEffect(() => {
+    setToken(sessionStorage.getItem("nf_recovery_token"));
+    setTokenChecked(true);
+  }, []);
+
+  if (!ready || !tokenChecked) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
@@ -25,7 +32,7 @@ function ResetPasswordPage() {
     );
   }
 
-  if (!user) {
+  if (!token && !user) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
@@ -64,12 +71,19 @@ function ResetPasswordPage() {
     setLoading(true);
 
     try {
-      await updateUser({ password: newPassword });
+      if (token) {
+        await recoverPassword(token, newPassword);
+        sessionStorage.removeItem("nf_recovery_token");
+      } else {
+        await updateUser({ password: newPassword });
+      }
       setSuccess(true);
     } catch (err: any) {
       const msg = err.message || "";
       if (/rate limit/i.test(msg)) {
         setError("Too many attempts. Please wait a few minutes before trying again.");
+      } else if (/expired|invalid|not found/i.test(msg)) {
+        setError("This password reset link has expired or is invalid. Please request a new one.");
       } else {
         setError(msg || "Failed to reset password. Please try again.");
       }
