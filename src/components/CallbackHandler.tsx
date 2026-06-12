@@ -14,15 +14,25 @@ export function CallbackHandler({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (processed.current) return;
-    if (!AUTH_HASH_PATTERN.test(window.location.hash)) return;
+    const hash = window.location.hash;
+    if (!AUTH_HASH_PATTERN.test(hash)) return;
     processed.current = true;
+
+    // Password recovery is handled as a single atomic step on the reset page:
+    // hand the raw token to /reset-password, which redeems it together with the
+    // new password via recoverPassword(). This avoids relying on a transient
+    // recovery session surviving a full page reload.
+    const recoveryMatch = hash.match(/[#&]recovery_token=([^&]+)/);
+    if (recoveryMatch) {
+      sessionStorage.setItem("nf_recovery_token", recoveryMatch[1]);
+      window.location.replace("/reset-password");
+      return;
+    }
 
     handleAuthCallback()
       .then((result) => {
         if (result?.type === "invite" && result.token) {
           setInviteToken(result.token);
-        } else if (result?.type === "recovery") {
-          window.location.href = "/reset-password";
         } else if (result?.type === "confirmation" || result?.type === "oauth") {
           window.location.href = "/admin";
         }
