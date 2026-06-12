@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { recoverPassword, updateUser } from "@netlify/identity";
+import { updateUser } from "@netlify/identity";
 import { useIdentity } from "../lib/identity-context.js";
 import { useEffect, useState } from "react";
 import { ArrowLeft, KeyRound } from "lucide-react";
@@ -72,7 +72,17 @@ function ResetPasswordPage() {
 
     try {
       if (token) {
-        await recoverPassword(token, newPassword);
+        // Reset via the server so the password is written through the reliable
+        // operator-token admin path, not a fragile recovery session.
+        const res = await fetch("/api/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, password: newPassword }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to reset password.");
+        }
         sessionStorage.removeItem("nf_recovery_token");
       } else {
         await updateUser({ password: newPassword });
@@ -127,13 +137,14 @@ function ResetPasswordPage() {
           {success ? (
             <div className="text-center">
               <div className="bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg p-3 mb-4">
-                Your password has been reset successfully.
+                Your password has been reset successfully. You can now log in
+                with your new password.
               </div>
               <Link
-                to="/admin"
+                to="/login"
                 className="inline-block bg-indigo-600 text-white font-medium py-2.5 px-6 rounded-lg hover:bg-indigo-700 transition-colors"
               >
-                Go to Admin Portal
+                Continue to Login
               </Link>
             </div>
           ) : (
