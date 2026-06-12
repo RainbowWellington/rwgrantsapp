@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { submitApplication } from "../server/applications.js";
 import { uploadFile } from "../server/uploads.js";
@@ -27,7 +27,6 @@ const HEAR_OPTIONS = [
 ];
 
 function ApplyPage() {
-  const navigate = useNavigate();
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");

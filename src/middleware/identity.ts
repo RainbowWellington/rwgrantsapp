@@ -23,6 +23,7 @@ export const requireAdminRoleMiddleware = createMiddleware().server(
   async ({ next }) => {
     const user = await getUser();
     if (!user) throw new Error("Authentication required");
+    if (!user.email) throw new Error("Authentication required");
     const [adminUser] = await db
       .select()
       .from(adminUsers)
