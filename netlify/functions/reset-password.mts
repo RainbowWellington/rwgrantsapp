@@ -2,18 +2,26 @@ import { admin, getIdentityConfig } from "@netlify/identity";
 import type { Context, Config } from "@netlify/functions";
 
 /**
- * Completes a password recovery flow.
+ * Backs the password-recovery flow in two steps so that a single-use, short-lived
+ * recovery token is never the thing standing between the user and a successful
+ * reset.
  *
- * The browser-side `recoverPassword()` helper redeems the recovery token to
- * mint a short-lived user session and then writes the new password through that
- * session's `PUT /user` endpoint. On this site that session-based write fails
- * with "Database error updating user". This endpoint avoids that path entirely:
- * it redeems the recovery token only to identify the user, then sets the
- * password through the operator-token admin endpoint (`/admin/users/:id`) — the
- * same reliable mechanism used to manage Identity users elsewhere in the app.
+ * Step 1 — "redeem" (`{ token }`): the browser hands over the raw recovery token
+ * the instant the reset page loads. We redeem it once against the Identity
+ * `/verify` endpoint and hand back the resulting session (`accessToken`). This
+ * happens within a second of the user clicking the email link, well inside the
+ * recovery token's lifetime, and the token is spent exactly once.
  *
- * Recovery is unauthenticated by design: possession of the single-use token
- * emailed to the account owner is the authorization.
+ * Step 2 — "commit" (`{ accessToken, password }`): when the user submits their
+ * new password we validate the session against `/user` and set the password via
+ * the operator-token admin endpoint (`/admin/users/:id`). The browser-side
+ * `PUT /user` path returns "Database error updating user" on this site, so we
+ * avoid it entirely. `confirm: true` also clears any unconfirmed-account state,
+ * another source of that database error.
+ *
+ * Splitting the flow means the user can type their password at their own pace,
+ * and a failed attempt no longer burns the recovery token: the session, not the
+ * one-time token, is what the commit step relies on.
  */
 
 function decodeJwtSubject(jwt: string): string | null {
@@ -29,22 +37,78 @@ function decodeJwtSubject(jwt: string): string | null {
   }
 }
 
+const INVALID_LINK_MESSAGE =
+  "This password reset link has expired or is invalid. Please request a new one.";
+const TEMPORARY_MESSAGE =
+  "We couldn't reach the account service. Please try again in a moment.";
+
 export default async (req: Request, _context: Context) => {
   if (req.method !== "POST") {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
 
-  let body: { token?: string; password?: string };
+  let body: { token?: string; accessToken?: string; password?: string };
   try {
-    body = (await req.json()) as { token?: string; password?: string };
+    body = (await req.json()) as typeof body;
   } catch {
     return Response.json({ error: "Invalid request body" }, { status: 400 });
   }
 
-  const { token, password } = body;
-  if (!token || !password) {
+  const config = getIdentityConfig();
+  if (!config?.url || !config.token) {
+    return Response.json({ error: "Identity not configured" }, { status: 500 });
+  }
+
+  // ---- Step 1: redeem the recovery token for a session -------------------
+  if (body.token && !body.accessToken) {
+    let verifyRes: Response;
+    try {
+      verifyRes = await fetch(`${config.url}/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "recovery", token: body.token }),
+      });
+    } catch {
+      return Response.json(
+        { error: TEMPORARY_MESSAGE, code: "temporary" },
+        { status: 502 }
+      );
+    }
+
+    if (!verifyRes.ok) {
+      // 4xx means the link itself is no good (expired, already used, unknown).
+      // 5xx is a transient backend problem the user can retry — don't tell
+      // them to request a brand-new link in that case.
+      if (verifyRes.status >= 500) {
+        return Response.json(
+          { error: TEMPORARY_MESSAGE, code: "temporary" },
+          { status: 502 }
+        );
+      }
+      return Response.json(
+        { error: INVALID_LINK_MESSAGE, code: "invalid" },
+        { status: 400 }
+      );
+    }
+
+    const verifyData = (await verifyRes.json().catch(() => ({}))) as {
+      access_token?: string;
+    };
+    if (!verifyData.access_token || !decodeJwtSubject(verifyData.access_token)) {
+      return Response.json(
+        { error: INVALID_LINK_MESSAGE, code: "invalid" },
+        { status: 400 }
+      );
+    }
+
+    return Response.json({ accessToken: verifyData.access_token });
+  }
+
+  // ---- Step 2: commit the new password using the redeemed session --------
+  const { accessToken, password } = body;
+  if (!accessToken || !password) {
     return Response.json(
-      { error: "A reset token and new password are required." },
+      { error: "A valid session and new password are required." },
       { status: 400 }
     );
   }
@@ -55,49 +119,48 @@ export default async (req: Request, _context: Context) => {
     );
   }
 
-  const config = getIdentityConfig();
-  if (!config?.url || !config.token) {
-    return Response.json({ error: "Identity not configured" }, { status: 500 });
-  }
-
-  // Step 1: Redeem the recovery token to identify the account it belongs to.
-  const verifyRes = await fetch(`${config.url}/verify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "recovery", token }),
-  });
-
-  if (!verifyRes.ok) {
-    const status =
-      verifyRes.status === 401 || verifyRes.status === 404
-        ? 400
-        : verifyRes.status;
+  // Validate the session against Identity so a forged token can't be used to
+  // reset an arbitrary account, and to recover the user's id.
+  let userRes: Response;
+  try {
+    userRes = await fetch(`${config.url}/user`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch {
     return Response.json(
-      {
-        error:
-          "This password reset link has expired or is invalid. Please request a new one.",
-      },
-      { status }
+      { error: TEMPORARY_MESSAGE, code: "temporary" },
+      { status: 502 }
     );
   }
 
-  const verifyData = (await verifyRes.json().catch(() => ({}))) as {
-    access_token?: string;
-  };
-  const userId = verifyData.access_token
-    ? decodeJwtSubject(verifyData.access_token)
-    : null;
-
-  if (!userId) {
+  if (!userRes.ok) {
+    if (userRes.status >= 500) {
+      return Response.json(
+        { error: TEMPORARY_MESSAGE, code: "temporary" },
+        { status: 502 }
+      );
+    }
     return Response.json(
-      { error: "Could not verify the reset link. Please request a new one." },
+      {
+        error:
+          "Your reset session has expired. Please request a new password reset link.",
+        code: "invalid",
+      },
       { status: 400 }
     );
   }
 
-  // Step 2: Set the new password via the operator-token admin endpoint.
+  const userData = (await userRes.json().catch(() => ({}))) as { id?: string };
+  const userId = userData.id || decodeJwtSubject(accessToken);
+  if (!userId) {
+    return Response.json(
+      { error: INVALID_LINK_MESSAGE, code: "invalid" },
+      { status: 400 }
+    );
+  }
+
   try {
-    await admin.updateUser(userId, { password });
+    await admin.updateUser(userId, { password, confirm: true });
   } catch {
     return Response.json(
       { error: "Failed to update password. Please try again." },

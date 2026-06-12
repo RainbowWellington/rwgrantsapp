@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { updateUser } from "@netlify/identity";
 import { useIdentity } from "../lib/identity-context.js";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, KeyRound } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 
@@ -9,22 +9,71 @@ export const Route = createFileRoute("/reset-password")({
   component: ResetPasswordPage,
 });
 
+const SESSION_KEY = "nf_recovery_session";
+
 function ResetPasswordPage() {
   const { user, ready } = useIdentity();
-  const [token, setToken] = useState<string | null>(null);
-  const [tokenChecked, setTokenChecked] = useState(false);
+  // The recovery token is redeemed once, here on mount, for a short-lived
+  // session. From then on the session — not the single-use token — is what the
+  // form relies on, so the user can take their time without the link expiring.
+  const [session, setSession] = useState<string | null>(null);
+  const [redeeming, setRedeeming] = useState(false);
+  const [linkInvalid, setLinkInvalid] = useState(false);
+  const [checked, setChecked] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const redeemStarted = useRef(false);
 
   useEffect(() => {
-    setToken(sessionStorage.getItem("nf_recovery_token"));
-    setTokenChecked(true);
+    if (redeemStarted.current) return;
+    redeemStarted.current = true;
+
+    const existingSession = sessionStorage.getItem(SESSION_KEY);
+    if (existingSession) {
+      setSession(existingSession);
+      setChecked(true);
+      return;
+    }
+
+    const rawToken = sessionStorage.getItem("nf_recovery_token");
+    if (!rawToken) {
+      setChecked(true);
+      return;
+    }
+
+    setRedeeming(true);
+    fetch("/api/reset-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: rawToken }),
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.accessToken) {
+          sessionStorage.setItem(SESSION_KEY, data.accessToken);
+          sessionStorage.removeItem("nf_recovery_token");
+          setSession(data.accessToken);
+        } else if (data.code === "temporary") {
+          // Backend hiccup — keep the token so a reload can retry.
+          setError(data.error || "Something went wrong. Please try again.");
+        } else {
+          sessionStorage.removeItem("nf_recovery_token");
+          setLinkInvalid(true);
+        }
+      })
+      .catch(() => {
+        setError("Something went wrong. Please try again.");
+      })
+      .finally(() => {
+        setRedeeming(false);
+        setChecked(true);
+      });
   }, []);
 
-  if (!ready || !tokenChecked) {
+  if (!ready || !checked || redeeming) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
@@ -32,7 +81,7 @@ function ResetPasswordPage() {
     );
   }
 
-  if (!token && !user) {
+  if (linkInvalid || (!session && !user)) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
@@ -71,19 +120,19 @@ function ResetPasswordPage() {
     setLoading(true);
 
     try {
-      if (token) {
-        // Reset via the server so the password is written through the reliable
-        // operator-token admin path, not a fragile recovery session.
+      if (session) {
+        // Set the password through the redeemed session via the reliable
+        // operator-token admin path on the server.
         const res = await fetch("/api/reset-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, password: newPassword }),
+          body: JSON.stringify({ accessToken: session, password: newPassword }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(data.error || "Failed to reset password.");
         }
-        sessionStorage.removeItem("nf_recovery_token");
+        sessionStorage.removeItem(SESSION_KEY);
       } else {
         await updateUser({ password: newPassword });
       }
@@ -92,8 +141,6 @@ function ResetPasswordPage() {
       const msg = err.message || "";
       if (/rate limit/i.test(msg)) {
         setError("Too many attempts. Please wait a few minutes before trying again.");
-      } else if (/expired|invalid|not found/i.test(msg)) {
-        setError("This password reset link has expired or is invalid. Please request a new one.");
       } else {
         setError(msg || "Failed to reset password. Please try again.");
       }

@@ -18,10 +18,10 @@ export function CallbackHandler({ children }: { children: React.ReactNode }) {
     if (!AUTH_HASH_PATTERN.test(hash)) return;
     processed.current = true;
 
-    // Password recovery is handled as a single atomic step on the reset page:
-    // hand the raw token to /reset-password, which posts it together with the
-    // new password to the /api/reset-password function. This avoids relying on
-    // a transient recovery session surviving a full page reload.
+    // Password recovery: hand the raw token to /reset-password, which redeems
+    // it for a short-lived session via /api/reset-password as soon as the page
+    // loads. The single-use recovery token is spent immediately and well within
+    // its lifetime; the user then sets a new password against that session.
     const recoveryMatch = hash.match(/[#&]recovery_token=([^&]+)/);
     if (recoveryMatch) {
       sessionStorage.setItem("nf_recovery_token", recoveryMatch[1]);
