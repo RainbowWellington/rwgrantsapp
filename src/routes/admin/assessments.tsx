@@ -147,7 +147,7 @@ function AssessmentSummary() {
     )
   ).sort();
 
-  const roundCounts = {
+  const roundCounts: Record<string, number> = {
     unassigned: appsWithAssessments.filter((a) => !a.fundingRoundId).length,
     ...Object.fromEntries(
       rounds.map((r) => [

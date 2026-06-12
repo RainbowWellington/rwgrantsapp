@@ -30,7 +30,7 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
       setReady(true);
     });
 
-    const unsubscribe = onAuthChange((u) => {
+    const unsubscribe = onAuthChange((_event, u) => {
       setUser(u ?? null);
     });
 
