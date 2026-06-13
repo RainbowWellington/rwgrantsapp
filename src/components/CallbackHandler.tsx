@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { handleAuthCallback, acceptInvite, AuthError } from "@netlify/identity";
+import { KeyRound } from "lucide-react";
 
 const AUTH_HASH_PATTERN =
   /^#(confirmation_token|recovery_token|invite_token|email_change_token|access_token)=/;
 
 export function CallbackHandler({ children }: { children: React.ReactNode }) {
   const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [recoveryToken, setRecoveryToken] = useState<string | null>(null);
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
@@ -18,14 +21,14 @@ export function CallbackHandler({ children }: { children: React.ReactNode }) {
     if (!AUTH_HASH_PATTERN.test(hash)) return;
     processed.current = true;
 
-    // Password recovery: hand the raw token to /reset-password, which redeems
-    // it for a short-lived session via /api/reset-password as soon as the page
-    // loads. The single-use recovery token is spent immediately and well within
-    // its lifetime; the user then sets a new password against that session.
+    // Password recovery: keep the raw token and show a "set new password" form.
+    // The token is redeemed once, server-side, only when the user submits — see
+    // /api/reset-password — so the single-use link can't be spent prematurely.
     const recoveryMatch = hash.match(/[#&]recovery_token=([^&]+)/);
     if (recoveryMatch) {
-      sessionStorage.setItem("nf_recovery_token", recoveryMatch[1]);
-      window.location.replace("/reset-password");
+      setRecoveryToken(recoveryMatch[1]);
+      // Strip the token from the address bar so a refresh doesn't reprocess it.
+      history.replaceState(null, "", window.location.pathname);
       return;
     }
 
@@ -64,58 +67,168 @@ export function CallbackHandler({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const handleReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!recoveryToken) return;
+    setError("");
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: recoveryToken, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to reset password.");
+      }
+      setSuccess(true);
+    } catch (err: any) {
+      setError(err.message || "Failed to reset password. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (recoveryToken) {
+    return (
+      <AuthCard
+        title="Set New Password"
+        subtitle="Choose a new password for your account"
+      >
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-4">
+            {error}
+          </div>
+        )}
+        {success ? (
+          <div className="text-center">
+            <div className="bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg p-3 mb-4">
+              Your password has been reset successfully. You can now log in with
+              your new password.
+            </div>
+            <a
+              href="/login"
+              className="inline-block bg-indigo-600 text-white font-medium py-2.5 px-6 rounded-lg hover:bg-indigo-700 transition-colors"
+            >
+              Continue to Login
+            </a>
+          </div>
+        ) : (
+          <form onSubmit={handleReset} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                New Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={6}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                placeholder="Enter new password (min 6 characters)"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Confirm Password
+              </label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                minLength={6}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                placeholder="Confirm new password"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-indigo-600 text-white font-medium py-2.5 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+            >
+              {loading ? "Resetting..." : "Reset Password"}
+            </button>
+          </form>
+        )}
+      </AuthCard>
+    );
+  }
+
   if (inviteToken) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
-          <div className="text-center mb-6">
-            <h1 className="text-2xl font-bold text-gray-900">
-              Accept Invite
-            </h1>
-            <p className="text-sm text-gray-500 mt-1">
-              Set a password to activate your account
-            </p>
+      <AuthCard
+        title="Accept Invite"
+        subtitle="Set a password to activate your account"
+      >
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-4">
+            {error}
           </div>
-
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-4">
-              {error}
+        )}
+        {success ? (
+          <div className="bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg p-3">
+            Account activated! Redirecting to the portal...
+          </div>
+        ) : (
+          <form onSubmit={handleAccept} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={6}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                placeholder="Choose a password (min 6 characters)"
+              />
             </div>
-          )}
-
-          {success ? (
-            <div className="bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg p-3">
-              Account activated! Redirecting to the portal...
-            </div>
-          ) : (
-            <form onSubmit={handleAccept} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={6}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
-                  placeholder="Choose a password (min 6 characters)"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-indigo-600 text-white font-medium py-2.5 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-              >
-                {loading ? "Activating..." : "Activate Account"}
-              </button>
-            </form>
-          )}
-        </div>
-      </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-indigo-600 text-white font-medium py-2.5 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+            >
+              {loading ? "Activating..." : "Activate Account"}
+            </button>
+          </form>
+        )}
+      </AuthCard>
     );
   }
 
   return <>{children}</>;
+}
+
+function AuthCard({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
+        <div className="text-center mb-6">
+          <div className="bg-indigo-100 w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-3">
+            <KeyRound className="w-6 h-6 text-indigo-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900">{title}</h1>
+          <p className="text-sm text-gray-500 mt-1">{subtitle}</p>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
 }

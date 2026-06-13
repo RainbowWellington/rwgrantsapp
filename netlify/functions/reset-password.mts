@@ -2,26 +2,18 @@ import { admin, getIdentityConfig } from "@netlify/identity";
 import type { Context, Config } from "@netlify/functions";
 
 /**
- * Backs the password-recovery flow in two steps so that a single-use, short-lived
- * recovery token is never the thing standing between the user and a successful
- * reset.
+ * Completes a password recovery in a single request.
  *
- * Step 1 — "redeem" (`{ token }`): the browser hands over the raw recovery token
- * the instant the reset page loads. We redeem it once against the Identity
- * `/verify` endpoint and hand back the resulting session (`accessToken`). This
- * happens within a second of the user clicking the email link, well inside the
- * recovery token's lifetime, and the token is spent exactly once.
+ * The browser sends the raw recovery token (from the `#recovery_token=` hash in
+ * the emailed link) together with the user's chosen new password. The token is
+ * redeemed exactly once, here, at the moment the user submits — never earlier —
+ * so there is no window in which a pre-redeemed session can go stale and no way
+ * for the single-use token to be spent before it is needed.
  *
- * Step 2 — "commit" (`{ accessToken, password }`): when the user submits their
- * new password we validate the session against `/user` and set the password via
- * the operator-token admin endpoint (`/admin/users/:id`). The browser-side
- * `PUT /user` path returns "Database error updating user" on this site, so we
- * avoid it entirely. `confirm: true` also clears any unconfirmed-account state,
- * another source of that database error.
- *
- * Splitting the flow means the user can type their password at their own pace,
- * and a failed attempt no longer burns the recovery token: the session, not the
- * one-time token, is what the commit step relies on.
+ * The new password is set through the operator-token admin endpoint
+ * (`admin.updateUser`), not the browser-side `PUT /user` path, which returns
+ * "Database error updating user" on this site. `confirm: true` also clears any
+ * unconfirmed-account state, another source of that error.
  */
 
 function decodeJwtSubject(jwt: string): string | null {
@@ -47,68 +39,17 @@ export default async (req: Request, _context: Context) => {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
 
-  let body: { token?: string; accessToken?: string; password?: string };
+  let body: { token?: string; password?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return Response.json({ error: "Invalid request body" }, { status: 400 });
   }
 
-  const config = getIdentityConfig();
-  if (!config?.url || !config.token) {
-    return Response.json({ error: "Identity not configured" }, { status: 500 });
-  }
-
-  // ---- Step 1: redeem the recovery token for a session -------------------
-  if (body.token && !body.accessToken) {
-    let verifyRes: Response;
-    try {
-      verifyRes = await fetch(`${config.url}/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "recovery", token: body.token }),
-      });
-    } catch {
-      return Response.json(
-        { error: TEMPORARY_MESSAGE, code: "temporary" },
-        { status: 502 }
-      );
-    }
-
-    if (!verifyRes.ok) {
-      // 4xx means the link itself is no good (expired, already used, unknown).
-      // 5xx is a transient backend problem the user can retry — don't tell
-      // them to request a brand-new link in that case.
-      if (verifyRes.status >= 500) {
-        return Response.json(
-          { error: TEMPORARY_MESSAGE, code: "temporary" },
-          { status: 502 }
-        );
-      }
-      return Response.json(
-        { error: INVALID_LINK_MESSAGE, code: "invalid" },
-        { status: 400 }
-      );
-    }
-
-    const verifyData = (await verifyRes.json().catch(() => ({}))) as {
-      access_token?: string;
-    };
-    if (!verifyData.access_token || !decodeJwtSubject(verifyData.access_token)) {
-      return Response.json(
-        { error: INVALID_LINK_MESSAGE, code: "invalid" },
-        { status: 400 }
-      );
-    }
-
-    return Response.json({ accessToken: verifyData.access_token });
-  }
-
-  // ---- Step 2: commit the new password using the redeemed session --------
-  const { accessToken, password } = body;
-  if (!accessToken || !password) {
+  const { token, password } = body;
+  if (!token) {
     return Response.json(
-      { error: "A valid session and new password are required." },
+      { error: INVALID_LINK_MESSAGE, code: "invalid" },
       { status: 400 }
     );
   }
@@ -119,12 +60,18 @@ export default async (req: Request, _context: Context) => {
     );
   }
 
-  // Validate the session against Identity so a forged token can't be used to
-  // reset an arbitrary account, and to recover the user's id.
-  let userRes: Response;
+  const config = getIdentityConfig();
+  if (!config?.url || !config.token) {
+    return Response.json({ error: "Identity not configured" }, { status: 500 });
+  }
+
+  // Redeem the single-use recovery token for a short-lived session.
+  let verifyRes: Response;
   try {
-    userRes = await fetch(`${config.url}/user`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+    verifyRes = await fetch(`${config.url}/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "recovery", token }),
     });
   } catch {
     return Response.json(
@@ -133,25 +80,27 @@ export default async (req: Request, _context: Context) => {
     );
   }
 
-  if (!userRes.ok) {
-    if (userRes.status >= 500) {
+  if (!verifyRes.ok) {
+    // 4xx means the link itself is no good (expired, already used, unknown).
+    // 5xx is a transient backend problem the user can retry.
+    if (verifyRes.status >= 500) {
       return Response.json(
         { error: TEMPORARY_MESSAGE, code: "temporary" },
         { status: 502 }
       );
     }
     return Response.json(
-      {
-        error:
-          "Your reset session has expired. Please request a new password reset link.",
-        code: "invalid",
-      },
+      { error: INVALID_LINK_MESSAGE, code: "invalid" },
       { status: 400 }
     );
   }
 
-  const userData = (await userRes.json().catch(() => ({}))) as { id?: string };
-  const userId = userData.id || decodeJwtSubject(accessToken);
+  const verifyData = (await verifyRes.json().catch(() => ({}))) as {
+    access_token?: string;
+  };
+  const userId = verifyData.access_token
+    ? decodeJwtSubject(verifyData.access_token)
+    : null;
   if (!userId) {
     return Response.json(
       { error: INVALID_LINK_MESSAGE, code: "invalid" },
