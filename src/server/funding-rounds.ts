@@ -4,9 +4,20 @@ import { fundingRounds, applications } from "../../db/schema.js";
 import { eq, desc } from "drizzle-orm";
 import { requireAuthMiddleware } from "../middleware/identity.js";
 
+// Funding round start/end dates are stored as plain YYYY-MM-DD calendar dates
+// (New Zealand local dates). Comparing them against a UTC "today" makes a round
+// that is only open today disappear during NZ morning hours, when UTC is still on
+// the previous calendar day. Compute today in the New Zealand time zone instead.
+function getNewZealandToday(): string {
+  // en-CA formats as YYYY-MM-DD, which matches the stored date strings.
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Pacific/Auckland",
+  }).format(new Date());
+}
+
 export const getActiveFundingRound = createServerFn({ method: "GET" })
   .handler(async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getNewZealandToday();
     const rows = await db
       .select()
       .from(fundingRounds)
