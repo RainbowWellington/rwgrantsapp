@@ -1,8 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { submitApplication } from "../server/applications.js";
 import { uploadFile } from "../server/uploads.js";
-import { Send, CheckCircle, ArrowLeft, Upload, X, FileText } from "lucide-react";
+import { getActiveFundingRound } from "../server/funding-rounds.js";
+import { Send, CheckCircle, ArrowLeft, Upload, X, FileText, CalendarX } from "lucide-react";
 
 export const Route = createFileRoute("/apply")({
   component: ApplyPage,
@@ -27,6 +28,7 @@ const HEAR_OPTIONS = [
 ];
 
 function ApplyPage() {
+  const [roundOpen, setRoundOpen] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
@@ -39,6 +41,12 @@ function ApplyPage() {
   >([]);
   const [uploadingBudget, setUploadingBudget] = useState(false);
   const [amountRequested, setAmountRequested] = useState(0);
+
+  useEffect(() => {
+    getActiveFundingRound()
+      .then((round) => setRoundOpen(round != null))
+      .catch(() => setRoundOpen(true));
+  }, []);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -193,6 +201,54 @@ function ApplyPage() {
       setSubmitting(false);
     }
   };
+
+  if (roundOpen === null) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="w-8 h-8 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!roundOpen) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-lg w-full text-center">
+          <div className="bg-indigo-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+            <CalendarX className="w-8 h-8 text-indigo-600" />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">
+            No Active Funding Rounds
+          </h2>
+          <div className="text-gray-600 space-y-4 text-left">
+            <p>
+              Currently there are no active funding rounds. Please check out our{" "}
+              <a
+                href="https://rainbowwellington.org.nz/grants/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-indigo-600 underline hover:text-indigo-800"
+              >
+                Grants page
+              </a>{" "}
+              for funding round dates.
+            </p>
+            <p>
+              If you require emergency hardship funding or support, please email{" "}
+              <a
+                href="mailto:hello@rainbowwellington.org.nz"
+                className="text-indigo-600 underline hover:text-indigo-800"
+              >
+                hello@rainbowwellington.org.nz
+              </a>
+              .
+            </p>
+            <p>Thanks</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (submitted) {
     return (

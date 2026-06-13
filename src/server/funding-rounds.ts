@@ -4,6 +4,20 @@ import { fundingRounds, applications } from "../../db/schema.js";
 import { eq, desc } from "drizzle-orm";
 import { requireAuthMiddleware } from "../middleware/identity.js";
 
+export const getActiveFundingRound = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = await db
+      .select()
+      .from(fundingRounds)
+      .where(eq(fundingRounds.status, "open"))
+      .orderBy(desc(fundingRounds.createdAt));
+    const active = rows.find(
+      (r) => r.startDate <= today && r.endDate >= today
+    );
+    return active ?? null;
+  });
+
 export const getFundingRounds = createServerFn({ method: "GET" })
   .middleware([requireAuthMiddleware])
   .handler(async () => {
