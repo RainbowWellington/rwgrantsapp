@@ -3,11 +3,40 @@ import { useState, useEffect } from "react";
 import { submitApplication } from "../server/applications.js";
 import { uploadFile } from "../server/uploads.js";
 import { getActiveFundingRound } from "../server/funding-rounds.js";
-import { Send, CheckCircle, ArrowLeft, Upload, X, FileText, CalendarX } from "lucide-react";
+import { Send, CheckCircle, ArrowLeft, Upload, X, FileText, CalendarX, Calendar, Wallet } from "lucide-react";
 
 export const Route = createFileRoute("/apply")({
   component: ApplyPage,
 });
+
+type FundingRound = {
+  id: number;
+  name: string;
+  description: string | null;
+  startDate: string;
+  endDate: string;
+  budgetAmount: string;
+};
+
+function formatDate(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-NZ", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function formatCurrency(value: string) {
+  const amount = Number(value);
+  if (Number.isNaN(amount)) return value;
+  return new Intl.NumberFormat("en-NZ", {
+    style: "currency",
+    currency: "NZD",
+    maximumFractionDigits: 0,
+  }).format(amount);
+}
 
 const ORG_TYPES = [
   "Individual",
@@ -28,6 +57,7 @@ const HEAR_OPTIONS = [
 ];
 
 function ApplyPage() {
+  const [round, setRound] = useState<FundingRound | null>(null);
   const [roundOpen, setRoundOpen] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -44,7 +74,10 @@ function ApplyPage() {
 
   useEffect(() => {
     getActiveFundingRound()
-      .then((round) => setRoundOpen(round != null))
+      .then((r) => {
+        setRound(r);
+        setRoundOpen(r != null);
+      })
       .catch(() => setRoundOpen(true));
   }, []);
 
@@ -291,6 +324,56 @@ function ApplyPage() {
             Complete the form below to apply for a community grant.
           </p>
         </div>
+
+        {round && (
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6 mb-8">
+            <h2 className="text-xl font-bold text-gray-900">{round.name}</h2>
+            {round.description && (
+              <p className="text-gray-600 mt-1">{round.description}</p>
+            )}
+            <div className="grid sm:grid-cols-3 gap-4 mt-5">
+              <div className="flex items-start gap-3">
+                <div className="bg-indigo-100 w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Wallet className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                    Funding Pool
+                  </p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {formatCurrency(round.budgetAmount)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="bg-indigo-100 w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Calendar className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                    Opens
+                  </p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {formatDate(round.startDate)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="bg-indigo-100 w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <CalendarX className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                    Closes
+                  </p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {formatDate(round.endDate)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 mb-6">
