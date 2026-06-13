@@ -13,13 +13,21 @@ import {
 } from "@netlify/identity";
 
 interface IdentityContextValue {
+  /** The current Identity user, or null when signed out. */
   user: User | null;
+  /** False until the initial session lookup has completed. */
   ready: boolean;
+  /** Signs the current user out and clears the session. */
   logout: () => Promise<void>;
 }
 
 const IdentityContext = createContext<IdentityContextValue | null>(null);
 
+/**
+ * Provides client-side Netlify Identity auth state to the React tree. Hydrates
+ * from the `nf_jwt` cookie on mount and stays in sync with login/logout events
+ * (including changes made in other browser tabs).
+ */
 export function IdentityProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
@@ -30,11 +38,9 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
       setReady(true);
     });
 
-    const unsubscribe = onAuthChange((_event, u) => {
+    return onAuthChange((_event, u) => {
       setUser(u ?? null);
     });
-
-    return unsubscribe;
   }, []);
 
   return (
