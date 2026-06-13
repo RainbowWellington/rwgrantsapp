@@ -1,5 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { login, requestPasswordRecovery } from "@netlify/identity";
+import {
+  login,
+  requestPasswordRecovery,
+  AuthError,
+  MissingIdentityError,
+} from "@netlify/identity";
 import { useIdentity } from "../lib/identity-context.js";
 import { useState } from "react";
 import { ArrowLeft, LogIn, KeyRound } from "lucide-react";
@@ -40,8 +45,20 @@ function LoginPage() {
     try {
       await login(email, password);
       navigate({ to: "/admin" });
-    } catch (err: any) {
-      setError(err.message || "Authentication failed. Please try again.");
+    } catch (err) {
+      if (err instanceof MissingIdentityError) {
+        setError(
+          "Login is temporarily unavailable. Please try again in a moment."
+        );
+      } else if (err instanceof AuthError) {
+        setError(
+          err.status === 401
+            ? "Invalid email or password."
+            : err.message || "Authentication failed. Please try again."
+        );
+      } else {
+        setError("Authentication failed. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -55,12 +72,20 @@ function LoginPage() {
     try {
       await requestPasswordRecovery(email);
       setRecoverySent(true);
-    } catch (err: any) {
-      const msg = err.message || "";
-      if (/rate limit/i.test(msg)) {
-        setError("Too many recovery requests. Please wait a few minutes before trying again.");
+    } catch (err) {
+      if (err instanceof MissingIdentityError) {
+        setError(
+          "Password recovery is temporarily unavailable. Please try again in a moment."
+        );
       } else {
-        setError(msg || "Failed to send recovery email. Please try again.");
+        const msg = err instanceof AuthError ? err.message : "";
+        if (/rate limit/i.test(msg)) {
+          setError(
+            "Too many recovery requests. Please wait a few minutes before trying again."
+          );
+        } else {
+          setError(msg || "Failed to send recovery email. Please try again.");
+        }
       }
     } finally {
       setLoading(false);
