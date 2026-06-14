@@ -3,7 +3,7 @@ import { db } from "../../db/index.js";
 import { applications, comments, assessments } from "../../db/schema.js";
 import { eq, desc } from "drizzle-orm";
 import { requireAuthMiddleware } from "../middleware/identity.js";
-import { findActiveFundingRound } from "./funding-rounds.js";
+import { findActiveFundingRound } from "./funding-rounds-internal.js";
 import {
   sendApplicationConfirmation,
   sendNewApplicationNotification,

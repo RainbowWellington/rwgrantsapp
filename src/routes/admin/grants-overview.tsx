@@ -3,7 +3,6 @@ import { getApplications } from "../../server/applications.js";
 import { getFundingRounds } from "../../server/funding-rounds.js";
 import { useState, useEffect } from "react";
 import { Download, Filter } from "lucide-react";
-import * as XLSX from "xlsx";
 
 export const Route = createFileRoute("/admin/grants-overview")({
   component: GrantsOverview,
@@ -59,7 +58,13 @@ function GrantsOverview() {
         : fundingRoundsList.find((r) => r.id === Number(selectedRoundId))
             ?.name ?? "";
 
-  function exportApprovedToExcel() {
+  async function exportApprovedToExcel() {
+    // Loaded lazily so the SheetJS bundle (which references the Node `Buffer`
+    // global) is not pulled into the eager page-load chunk shared across the
+    // admin routes. Importing it at module scope crashed every admin page in
+    // the browser with "Buffer is not defined".
+    const XLSX = await import("xlsx");
+
     const rows = approvedApps.map((app) => ({
       "Full Name": app.fullName || "",
       Organisation: app.organizationName || "",
