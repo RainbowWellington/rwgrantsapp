@@ -228,6 +228,9 @@ function ApplyPage() {
         },
       });
       setSubmitted(true);
+      setUploadedFiles([]);
+      setBudgetFiles([]);
+      setAmountRequested(0);
     } catch (err: any) {
       setError(err.message || "Failed to submit application. Please try again.");
     } finally {
@@ -302,6 +305,9 @@ function ApplyPage() {
             onClick={() => {
               setSubmitted(false);
               setError("");
+              setUploadedFiles([]);
+              setBudgetFiles([]);
+              setAmountRequested(0);
             }}
             className="inline-flex items-center gap-2 text-indigo-600 hover:text-indigo-800 font-medium"
           >
