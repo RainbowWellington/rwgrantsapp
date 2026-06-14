@@ -3,6 +3,7 @@ import { db } from "../../db/index.js";
 import { applications, comments, assessments } from "../../db/schema.js";
 import { eq, desc } from "drizzle-orm";
 import { requireAuthMiddleware } from "../middleware/identity.js";
+import { findActiveFundingRound } from "./funding-rounds.js";
 import {
   sendApplicationConfirmation,
   sendNewApplicationNotification,
@@ -47,11 +48,15 @@ export const submitApplication = createServerFn({ method: "POST" })
     }) => input
   )
   .handler(async ({ data }) => {
+    // Attach the application to whichever funding round is currently open so it
+    // is counted under the round it was created under.
+    const activeRound = await findActiveFundingRound();
     const [application] = await db
       .insert(applications)
       .values({
         ...data,
         status: "submitted",
+        fundingRoundId: activeRound?.id ?? null,
       })
       .returning();
 

@@ -15,18 +15,25 @@ function getNewZealandToday(): string {
   }).format(new Date());
 }
 
+// Shared lookup for the funding round that is currently open and within its
+// date window. Used both by the public endpoint below and at submission time so
+// that new applications are attached to the round they are created under.
+export async function findActiveFundingRound() {
+  const today = getNewZealandToday();
+  const rows = await db
+    .select()
+    .from(fundingRounds)
+    .where(eq(fundingRounds.status, "open"))
+    .orderBy(desc(fundingRounds.createdAt));
+  const active = rows.find(
+    (r) => r.startDate <= today && r.endDate >= today
+  );
+  return active ?? null;
+}
+
 export const getActiveFundingRound = createServerFn({ method: "GET" })
   .handler(async () => {
-    const today = getNewZealandToday();
-    const rows = await db
-      .select()
-      .from(fundingRounds)
-      .where(eq(fundingRounds.status, "open"))
-      .orderBy(desc(fundingRounds.createdAt));
-    const active = rows.find(
-      (r) => r.startDate <= today && r.endDate >= today
-    );
-    return active ?? null;
+    return findActiveFundingRound();
   });
 
 export const getFundingRounds = createServerFn({ method: "GET" })
